@@ -9,11 +9,14 @@ import sys
 import tempfile
 import time
 from collections import defaultdict, deque
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+import yt_dlp
 from dotenv import load_dotenv
-from pytgcalls import PyTgCalls, filters as fl, idle
+from pytgcalls import PyTgCalls, idle
+from pytgcalls import filters as fl
 from pytgcalls.types import MediaStream, StreamEnded
 from telethon import Button, TelegramClient, events
 from telethon.errors import (
@@ -25,6 +28,7 @@ from telethon.errors import (
     UserPrivacyRestrictedError,
 )
 from telethon.sessions import SQLiteSession, StringSession
+from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.functions.channels import (
     EditAdminRequest,
     EditBannedRequest,
@@ -32,7 +36,6 @@ from telethon.tl.functions.channels import (
     InviteToChannelRequest,
     JoinChannelRequest,
 )
-from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.functions.messages import (
     AddChatUserRequest,
     EditExportedChatInviteRequest,
@@ -54,7 +57,6 @@ from telethon.tl.types import (
     User,
 )
 from telethon.utils import get_peer_id
-import yt_dlp
 
 load_dotenv()
 
@@ -224,7 +226,7 @@ class MusicBot:
 
         assistant_session_file = os.getenv("ASSISTANT_SESSION_FILE")
         session_path = Path(
-            assistant_session_file if assistant_session_file else "telegram_music_bot.session"
+            assistant_session_file or "telegram_music_bot.session"
         ).expanduser()
         if session_path.exists():
             LOGGER.info("Using assistant session file: %s", session_path)
@@ -376,7 +378,7 @@ class MusicBot:
                 await event.respond(MSG_ADMIN_ONLY)
                 return
             await event.respond("봇을 재시작합니다...")
-            asyncio.create_task(self._reload())
+            self._reload_task = asyncio.create_task(self._reload())
 
         @self.bot_client.on(events.ChatAction)
         async def on_bot_added(event: events.ChatAction.Event) -> None:
@@ -400,7 +402,10 @@ class MusicBot:
                 )
                 return
             await self._promote_assistant(event.chat_id, force=True, notify=True)
-            await event.respond("재생 계정을 이 그룹으로 초대했습니다. /play 또는 /join 으로 음성채팅에 불러올 수 있습니다.")
+            await event.respond(
+                "재생 계정을 이 그룹으로 초대했습니다. "
+                "/play 또는 /join 으로 음성채팅에 불러올 수 있습니다."
+            )
 
         @self.bot_client.on(events.ChatAction)
         async def on_assistant_membership(event: events.ChatAction.Event) -> None:
@@ -421,10 +426,8 @@ class MusicBot:
                 await event.answer("채널을 구독해야 사용할 수 있습니다.", alert=True)
                 return
             if action == "close":
-                try:
+                with suppress(Exception):
                     await event.delete()
-                except Exception:
-                    pass
                 self.np_msgs.pop(chat_id, None)
                 return
             if action == "queue":
@@ -986,15 +989,15 @@ class MusicBot:
         poll_media = getattr(message, "poll", None)
         if poll_media is None:
             return False
-        expr = re.search(r"(\d+)\s*([+\-−×*xX÷/])\s*(\d+)", text)
+        expr = re.search(r"(\d+)\s*([+\-−×*xX÷/])\s*(\d+)", text)  # noqa: RUF001
         if expr is None:
             return False
         left, op, right = int(expr.group(1)), expr.group(2), int(expr.group(3))
         if op == "+":
             value = left + right
-        elif op in "-−":
+        elif op in "-−":  # noqa: RUF001
             value = left - right
-        elif op in "×*xX":
+        elif op in "×*xX":  # noqa: RUF001
             value = left * right
         else:
             if right == 0 or left % right:

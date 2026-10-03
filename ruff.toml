@@ -1,0 +1,14 @@
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["F", "E", "W", "I", "UP", "SIM", "FURB", "BLE", "S", "B", "RUF"]
+ignore = [
+    # 텔레그램/외부 API 호출이 많아 의도적으로 넓은 except를 쓴다.
+    "BLE001", "S110", "S112",
+    # 쉘 없이 고정 인자로 ffmpeg/execv를 호출하는 것이 의도된 안전한 방식이다.
+    "S603", "S606", "S607",
+]
+
+[lint.isort]
+known-first-party = ["config", "handlers", "music_bot", "services"]
