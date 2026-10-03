@@ -11,7 +11,6 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Deque
 
 from dotenv import load_dotenv
 from pytgcalls import PyTgCalls, filters as fl, idle
@@ -90,6 +89,63 @@ def _format_track(track: Track) -> str:
     return f"{track.title} · {_format_duration(track.duration)} · 요청자 {track.requested_by}"
 
 
+# Telethon 핸들러와 aiogram 라우터가 공유하는 안내 문구.
+START_TEXT = (
+    "🎵 음성채팅 노래봇\n\n"
+    "재생하려면 /play 노래 제목 을 입력하세요.\n"
+    "/join 으로 재생 계정을 음성채팅에 불러올 수 있습니다.\n"
+    "전체 명령어는 /help 에서 확인할 수 있습니다."
+)
+HELP_TEXT = (
+    "🎵 노래봇 명령어\n\n"
+    "[재생]\n"
+    "/play <노래 제목 또는 YouTube 링크> - 재생 또는 대기열 추가\n"
+    "/skip - 현재 곡 건너뛰기\n"
+    "/pause - 일시정지\n"
+    "/resume - 재생 재개\n\n"
+    "[대기열 및 종료]\n"
+    "/queue - 현재 곡과 대기열 확인\n"
+    "/stop - 재생·대기열 종료 및 음성채팅 퇴장\n"
+    "/join - 재생 계정을 이 그룹에 초대하고 음성채팅으로 불러오기\n\n"
+    "/reload - 봇 프로세스 재시작 (그룹 관리자 전용)\n\n"
+    "※ 재생 계정을 자동으로 들이려면 이 봇에 '사용자 초대' 권한이 필요합니다.\n"
+    "※ '관리자 추가' 권한을 주면 관리봇 캡챠로부터 재생 계정을 자동으로 보호합니다."
+)
+MSG_ADMIN_ONLY = "이 명령은 그룹 관리자만 사용할 수 있습니다."
+MSG_NO_TRACK = "현재 재생 중인 곡이 없습니다."
+MSG_QUEUE_EMPTY = "대기열이 비어 있습니다."
+MSG_QUEUE_ENDED = "대기열이 비어 있어 재생을 종료했습니다."
+MSG_PAUSED = "일시정지했습니다."
+MSG_ALREADY_PAUSED = "이미 일시정지 상태입니다."
+MSG_RESUMED = "재생을 이어갑니다."
+MSG_NOT_PAUSED = "일시정지 상태가 아닙니다."
+MSG_STOPPED = "재생을 종료하고 음성채팅에서 나갔습니다."
+MSG_PLAY_USAGE = "사용법: /play 노래 제목 또는 YouTube 링크"
+MSG_TRACK_NOT_FOUND = "음원을 찾지 못했습니다. 다른 검색어 또는 링크를 사용하세요."
+
+
+_MEDIA_IGNORED_SUFFIXES = frozenset({".part", ".ytdl"})
+
+
+def _media_files(job_dir: Path) -> list[Path]:
+    """다운로드 디렉터리에서 완성된 미디어 파일만 골라낸다."""
+    return [
+        p for p in job_dir.iterdir()
+        if p.is_file() and p.suffix not in _MEDIA_IGNORED_SUFFIXES
+    ]
+
+
+def _queue_text(current: Track | None, queued) -> str | None:
+    """현재 곡과 대기열을 표시용 텍스트로 만든다. 둘 다 비어 있으면 None."""
+    if current is None and not queued:
+        return None
+    lines = [f"재생 중: {_format_track(current)}" if current else "재생 중인 곡 없음"]
+    lines.extend(
+        f"{index}. {_format_track(track)}" for index, track in enumerate(queued, start=1)
+    )
+    return "\n".join(lines)
+
+
 # 라이브/커버/리믹스 등 원곡이 아닌 버전을 뒤로 미는 검색 점수용 키워드.
 _BAD_VERSION_RE = re.compile(
     r"\b(live|concert|cover|remix|acoustic|busking|fancam|karaoke|"
@@ -138,7 +194,7 @@ class MusicBot:
         self.bot_id: int | None = None
         self.assistant_id: int | None = None
         self.assistant_ref = None
-        self.queues: dict[int, Deque[Track]] = defaultdict(deque)
+        self.queues: dict[int, deque[Track]] = defaultdict(deque)
         self.current: dict[int, Track] = {}
         self.advance_tasks: dict[int, asyncio.Task[None]] = {}
         self.locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -172,12 +228,11 @@ class MusicBot:
         ).expanduser()
         if session_path.exists():
             LOGGER.info("Using assistant session file: %s", session_path)
-            return TelegramClient(SQLiteSession(str(session_path.with_suffix(""))), self.api_id, self.api_hash)
-
-        LOGGER.warning(
-            "ASSISTANT_SESSION이 없어서 새 세션 파일을 사용합니다. "
-            "기존 계정으로 로그인하려면 generate_session.py로 StringSession을 생성하세요."
-        )
+        else:
+            LOGGER.warning(
+                "ASSISTANT_SESSION이 없어서 새 세션 파일을 사용합니다. "
+                "기존 계정으로 로그인하려면 generate_session.py로 StringSession을 생성하세요."
+            )
         return TelegramClient(SQLiteSession(str(session_path.with_suffix(""))), self.api_id, self.api_hash)
 
     def _register_handlers(self) -> None:
@@ -185,32 +240,13 @@ class MusicBot:
         async def start_command(event: events.NewMessage.Event) -> None:
             if not event.is_group:
                 return
-            await event.respond(
-                "🎵 음성채팅 노래봇\n\n"
-                "재생하려면 /play 노래 제목 을 입력하세요.\n"
-                "/join 으로 재생 계정을 음성채팅에 불러올 수 있습니다.\n"
-                "전체 명령어는 /help 에서 확인할 수 있습니다."
-            )
+            await event.respond(START_TEXT)
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/help(?:@\w+)?$"))
         async def help_command(event: events.NewMessage.Event) -> None:
             if not event.is_group:
                 return
-            await event.respond(
-                "🎵 노래봇 명령어\n\n"
-                "[재생]\n"
-                "/play <노래 제목 또는 YouTube 링크> - 재생 또는 대기열 추가\n"
-                "/skip - 현재 곡 건너뛰기\n"
-                "/pause - 일시정지\n"
-                "/resume - 재생 재개\n\n"
-                "[대기열 및 종료]\n"
-                "/queue - 현재 곡과 대기열 확인\n"
-                "/stop - 재생·대기열 종료 및 음성채팅 퇴장\n"
-                "/join - 재생 계정을 이 그룹에 초대하고 음성채팅으로 불러오기\n\n"
-                "/reload - 봇 프로세스 재시작 (그룹 관리자 전용)\n\n"
-                "※ 재생 계정을 자동으로 들이려면 이 봇에 '사용자 초대' 권한이 필요합니다.\n"
-                "※ '관리자 추가' 권한을 주면 관리봇 캡챠로부터 재생 계정을 자동으로 보호합니다."
-            )
+            await event.respond(HELP_TEXT)
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/play(?:@\w+)?(?:\s+(.+))?$"))
         async def play_command(event: events.NewMessage.Event) -> None:
@@ -218,7 +254,7 @@ class MusicBot:
                 return
             query = event.pattern_match.group(1)
             if not query:
-                await event.respond("사용법: /play 노래 제목 또는 YouTube 링크")
+                await event.respond(MSG_PLAY_USAGE)
                 return
             status = await event.respond("음원을 찾는 중입니다...")
             try:
@@ -227,23 +263,20 @@ class MusicBot:
                 track = await asyncio.to_thread(self._search_track, query.strip(), requested_by)
             except Exception as exc:
                 LOGGER.info("Track lookup failed: %s", exc)
-                await status.edit("음원을 찾지 못했습니다. 다른 검색어 또는 링크를 사용하세요.")
+                await status.edit(MSG_TRACK_NOT_FOUND)
                 return
 
             chat_id = event.chat_id
-            async with self.locks[chat_id]:
-                if chat_id in self.current:
-                    self.queues[chat_id].append(track)
-                    await status.edit(f"대기열 {len(self.queues[chat_id])}번에 추가: {track.title}")
-                    return
-                try:
-                    pulled = await self._ensure_assistant_member(chat_id)
-                    await self._promote_assistant(chat_id)
-                    await self._play_track(chat_id, track)
-                except Exception as exc:
-                    LOGGER.exception("Could not start playback")
-                    await status.edit(f"음성 채팅 재생을 시작하지 못했습니다: {exc}")
-                    return
+            try:
+                async with self.locks[chat_id]:
+                    queued, pulled = await self._enqueue_or_play(chat_id, track)
+            except Exception as exc:
+                LOGGER.exception("Could not start playback")
+                await status.edit(f"음성 채팅 재생을 시작하지 못했습니다: {exc}")
+                return
+            if queued:
+                await status.edit(f"대기열 {len(self.queues[chat_id])}번에 추가: {track.title}")
+                return
             pulled_note = "\n재생 계정을 이 그룹으로 불러왔습니다." if pulled else ""
             text, buttons = self._np_payload(chat_id)
             await status.edit(
@@ -261,12 +294,12 @@ class MusicBot:
             chat_id = event.chat_id
             async with self.locks[chat_id]:
                 if chat_id not in self.current:
-                    await event.respond("현재 재생 중인 곡이 없습니다.")
+                    await event.respond(MSG_NO_TRACK)
                     return
                 next_track = await self._advance(chat_id)
             await self._np_refresh(chat_id)
             await event.respond(
-                f"다음 곡 재생: {next_track.title}" if next_track else "대기열이 비어 있어 재생을 종료했습니다."
+                f"다음 곡 재생: {next_track.title}" if next_track else MSG_QUEUE_ENDED
             )
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/pause(?:@\w+)?$"))
@@ -276,14 +309,14 @@ class MusicBot:
             chat_id = event.chat_id
             async with self.locks[chat_id]:
                 if chat_id not in self.current:
-                    await event.respond("현재 재생 중인 곡이 없습니다.")
+                    await event.respond(MSG_NO_TRACK)
                     return
                 if chat_id in self.paused:
-                    await event.respond("이미 일시정지 상태입니다.")
+                    await event.respond(MSG_ALREADY_PAUSED)
                     return
                 await self._pause_playback(chat_id)
             await self._np_refresh(chat_id)
-            await event.respond("일시정지했습니다.")
+            await event.respond(MSG_PAUSED)
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/resume(?:@\w+)?$"))
         async def resume_command(event: events.NewMessage.Event) -> None:
@@ -293,14 +326,14 @@ class MusicBot:
             async with self.locks[chat_id]:
                 track = self.current.get(chat_id)
                 if track is None:
-                    await event.respond("현재 재생 중인 곡이 없습니다.")
+                    await event.respond(MSG_NO_TRACK)
                     return
                 if chat_id not in self.paused:
-                    await event.respond("일시정지 상태가 아닙니다.")
+                    await event.respond(MSG_NOT_PAUSED)
                     return
                 await self._resume_playback(chat_id)
             await self._np_refresh(chat_id)
-            await event.respond("재생을 이어갑니다.")
+            await event.respond(MSG_RESUMED)
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/stop(?:@\w+)?$"))
         async def stop_command(event: events.NewMessage.Event) -> None:
@@ -310,7 +343,7 @@ class MusicBot:
             async with self.locks[chat_id]:
                 await self._stop_playback(chat_id)
             await self._np_refresh(chat_id)
-            await event.respond("재생을 종료하고 음성 채팅에서 나갔습니다.")
+            await event.respond(MSG_STOPPED)
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/join(?:@\w+)?$"))
         async def join_command(event: events.NewMessage.Event) -> None:
@@ -320,14 +353,7 @@ class MusicBot:
             status = await event.respond("재생 계정을 그룹으로 부르는 중입니다...")
             try:
                 async with self.locks[chat_id]:
-                    await self._ensure_assistant_member(chat_id)
-                    promotion = await self._promote_assistant(chat_id, force=True)
-                    active_calls = await self.calls.calls
-                    if chat_id not in self.current and chat_id not in active_calls:
-                        await self.calls.play(chat_id)
-                        unmuted = await self._try_unmute(chat_id)
-                        if unmuted is False:
-                            await self._notify_muted(chat_id)
+                    promotion = await self._join_voice_chat(chat_id)
             except Exception as exc:
                 LOGGER.exception("Could not pull assistant into %s", chat_id)
                 await status.edit(f"재생 계정을 불러오지 못했습니다: {exc}")
@@ -347,7 +373,7 @@ class MusicBot:
                 return
             # ADMIN_ONLY와 무관하게 항상 그룹 관리자 전용으로 둔다.
             if not await self._is_group_admin(event):
-                await event.respond("이 명령은 그룹 관리자만 사용할 수 있습니다.")
+                await event.respond(MSG_ADMIN_ONLY)
                 return
             await event.respond("봇을 재시작합니다...")
             asyncio.create_task(self._reload())
@@ -384,14 +410,8 @@ class MusicBot:
         async def queue_command(event: events.NewMessage.Event) -> None:
             if not event.is_group:
                 return
-            current = self.current.get(event.chat_id)
-            queued = self.queues[event.chat_id]
-            if current is None and not queued:
-                await event.respond("대기열이 비어 있습니다.")
-                return
-            lines = [f"재생 중: {_format_track(current)}" if current else "재생 중인 곡 없음"]
-            lines.extend(f"{index}. {_format_track(track)}" for index, track in enumerate(queued, start=1))
-            await event.respond("\n".join(lines))
+            text = _queue_text(self.current.get(event.chat_id), self.queues[event.chat_id])
+            await event.respond(text if text is not None else MSG_QUEUE_EMPTY)
 
         @self.bot_client.on(events.CallbackQuery(pattern=rb"^np:"))
         async def np_callback(event: events.CallbackQuery.Event) -> None:
@@ -408,40 +428,35 @@ class MusicBot:
                 self.np_msgs.pop(chat_id, None)
                 return
             if action == "queue":
-                current = self.current.get(chat_id)
-                queued = self.queues[chat_id]
-                if current is None and not queued:
-                    await event.answer("대기열이 비어 있습니다.", alert=True)
+                text = _queue_text(self.current.get(chat_id), self.queues[chat_id])
+                if text is None:
+                    await event.answer(MSG_QUEUE_EMPTY, alert=True)
                     return
-                lines = [f"재생 중: {_format_track(current)}" if current else "재생 중인 곡 없음"]
-                lines.extend(
-                    f"{index}. {_format_track(track)}" for index, track in enumerate(queued, start=1)
-                )
-                await event.answer("\n".join(lines)[:190], alert=True)
+                await event.answer(text[:190], alert=True)
                 return
             async with self.locks[chat_id]:
                 if action == "toggle":
                     if chat_id not in self.current:
-                        await event.answer("현재 재생 중인 곡이 없습니다.")
+                        await event.answer(MSG_NO_TRACK)
                         return
                     if chat_id in self.paused:
                         await self._resume_playback(chat_id)
-                        answer = "재생을 이어갑니다."
+                        answer = MSG_RESUMED
                     else:
                         await self._pause_playback(chat_id)
-                        answer = "일시정지했습니다."
+                        answer = MSG_PAUSED
                 elif action == "skip":
                     if chat_id not in self.current:
-                        await event.answer("현재 재생 중인 곡이 없습니다.")
+                        await event.answer(MSG_NO_TRACK)
                         return
                     next_track = await self._advance(chat_id)
                     answer = (
                         f"다음 곡 재생: {next_track.title}" if next_track
-                        else "대기열이 비어 있어 재생을 종료했습니다."
+                        else MSG_QUEUE_ENDED
                     )
                 elif action == "stop":
                     await self._stop_playback(chat_id)
-                    answer = "재생을 종료하고 음성 채팅에서 나갔습니다."
+                    answer = MSG_STOPPED
                 else:
                     return
             await self._np_refresh(chat_id)
@@ -543,16 +558,19 @@ class MusicBot:
         remaining = self.remaining.get(chat_id)
         self._schedule_advance(chat_id, max(remaining, 1.0) if remaining is not None else None)
 
+    async def _leave_call(self, chat_id: int) -> None:
+        try:
+            await self.calls.leave_call(chat_id)
+        except Exception:
+            LOGGER.info("Voice chat already disconnected for %s", chat_id)
+
     async def _stop_playback(self, chat_id: int) -> None:
         self._cancel_advance(chat_id)
         self.queues.pop(chat_id, None)
         self.current.pop(chat_id, None)
         self._reset_playback_state(chat_id)
         self._cleanup_media(chat_id)
-        try:
-            await self.calls.leave_call(chat_id)
-        except Exception:
-            LOGGER.info("Voice chat already disconnected for %s", chat_id)
+        await self._leave_call(chat_id)
 
     async def _is_group_admin(self, event: events.NewMessage.Event) -> bool:
         # 익명 관리자가 보낸 메시지는 발신자가 유저가 아니라 그룹(채널) 자체로
@@ -564,12 +582,15 @@ class MusicBot:
             channel_id = -chat_id - 10**12 if chat_id < -(10**12) else abs(chat_id)
             if getattr(sender, "id", None) == channel_id:
                 return True
+        return await self._check_admin(event.chat_id, event.sender_id)
+
+    async def _check_admin(self, chat_id: int, user_id: int) -> bool:
         try:
-            permissions = await self.bot_client.get_permissions(event.chat_id, event.sender_id)
+            permissions = await self.bot_client.get_permissions(chat_id, user_id)
         except Exception as exc:
             LOGGER.info(
                 "Permission check failed for user %s in %s: %s",
-                event.sender_id, event.chat_id, exc,
+                user_id, chat_id, exc,
             )
             return False
         return bool(getattr(permissions, "is_admin", False) or getattr(permissions, "is_creator", False))
@@ -613,19 +634,14 @@ class MusicBot:
             return True
         if await self._is_group_admin(event):
             return True
-        await event.respond("이 명령은 그룹 관리자만 사용할 수 있습니다.")
+        await event.respond(MSG_ADMIN_ONLY)
         return False
 
     async def allowed_user(self, chat_id: int, user_id: int) -> bool:
         """aiogram Router가 재생 제어 권한을 확인할 때 사용하는 공용 검사."""
         if not self.admin_only:
             return True
-        try:
-            permissions = await self.bot_client.get_permissions(chat_id, user_id)
-        except Exception:
-            LOGGER.exception("Permission check failed for user %s in %s", user_id, chat_id)
-            return False
-        return bool(getattr(permissions, "is_admin", False) or getattr(permissions, "is_creator", False))
+        return await self._check_admin(chat_id, user_id)
 
     async def _ensure_assistant_member(self, chat_id: int) -> bool:
         """재생 계정이 그룹에 없으면 봇이 직접 초대하고, 안 되면 일회용 링크로 입장시킨다.
@@ -642,6 +658,20 @@ class MusicBot:
         self._recent_joins[chat_id] = time.time()
         await self._remember_chat_for_assistant(chat_id)
         return True
+
+    async def _join_voice_chat(self, chat_id: int) -> str:
+        """재생 계정을 그룹에 넣고 음성채팅에 입장시킨다.
+
+        반환값은 _promote_assistant와 같다. locks[chat_id]를 잡은 상태에서 호출.
+        """
+        await self._ensure_assistant_member(chat_id)
+        promotion = await self._promote_assistant(chat_id, force=True)
+        active_calls = await self.calls.calls
+        if chat_id not in self.current and chat_id not in active_calls:
+            await self.calls.play(chat_id)
+            if await self._try_unmute(chat_id) is False:
+                await self._notify_muted(chat_id)
+        return promotion
 
     async def _assistant_is_member(self, chat) -> bool:
         try:
@@ -756,9 +786,7 @@ class MusicBot:
     def _hash_from_link(link: str | None) -> str | None:
         if not link:
             return None
-        slug = link.strip().rstrip("/").rsplit("/", 1)[-1]
-        if slug.startswith("+"):
-            slug = slug[1:]
+        slug = link.strip().rstrip("/").rsplit("/", 1)[-1].removeprefix("+")
         return slug or None
 
     async def _approve_join(self, chat) -> None:
@@ -1050,28 +1078,41 @@ class MusicBot:
             raise ValueError("검색 결과가 없습니다")
         candidates = sorted(candidates, key=MusicBot._originality_score, reverse=True)
         urls = tuple(entry.get("webpage_url") or entry.get("url") for entry in candidates)
-        for entry, url in zip(candidates, urls):
+        track = MusicBot._first_playable(candidates, requested_by, urls)
+        if track is not None:
+            return track
+        if not is_url:
+            return MusicBot._search_soundcloud_track(query.removeprefix("ytsearch10:"), requested_by)
+        raise ValueError("YouTube에서 재생 가능한 영상을 찾지 못했습니다")
+
+    @staticmethod
+    def _first_playable(
+        entries, requested_by: str, candidate_urls: tuple[str, ...] | None = None
+    ) -> Track | None:
+        """원곡 점수 순으로 후보를 순회하며 처음 재생 가능한 Track을 반환한다.
+
+        candidate_urls를 넘기면 선택된 Track의 폴백 후보 목록으로 기록된다.
+        """
+        for entry in sorted(
+            (e for e in entries if e), key=MusicBot._originality_score, reverse=True
+        ):
+            url = entry.get("webpage_url") or entry.get("url")
+            if not url:
+                continue
             track = Track(
                 title=entry.get("title", "제목 없음"),
                 webpage_url=url,
                 requested_by=requested_by,
                 duration=entry.get("duration"),
-                candidate_urls=(url,),
+                candidate_urls=candidate_urls or (url,),
             )
             try:
                 MusicBot._stream_info(track)
-                return Track(
-                    title=track.title,
-                    webpage_url=track.webpage_url,
-                    requested_by=track.requested_by,
-                    duration=track.duration,
-                    candidate_urls=urls,
-                )
             except Exception:
                 continue
-        if not is_url:
-            return MusicBot._search_soundcloud_track(query.removeprefix("ytsearch10:"), requested_by)
-        raise ValueError("YouTube에서 재생 가능한 영상을 찾지 못했습니다")
+            LOGGER.info("Selected track: %s (%s)", track.title, track.webpage_url)
+            return track
+        return None
 
     @staticmethod
     def _originality_score(entry) -> int:
@@ -1108,27 +1149,10 @@ class MusicBot:
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(f"scsearch5:{query}", download=False)
         entries = info.get("entries", []) if isinstance(info, dict) else []
-        for entry in sorted(
-            (e for e in entries if e), key=MusicBot._originality_score, reverse=True
-        ):
-            if not entry:
-                continue
-            url = entry.get("webpage_url") or entry.get("url")
-            if not url:
-                continue
-            track = Track(
-                title=entry.get("title", "제목 없음"),
-                webpage_url=url,
-                requested_by=requested_by,
-                duration=entry.get("duration"),
-                candidate_urls=(url,),
-            )
-            try:
-                MusicBot._stream_info(track)
-                return track
-            except Exception:
-                continue
-        raise ValueError("YouTube와 SoundCloud에서 재생 가능한 음원을 찾지 못했습니다")
+        track = MusicBot._first_playable(entries, requested_by)
+        if track is None:
+            raise ValueError("YouTube와 SoundCloud에서 재생 가능한 음원을 찾지 못했습니다")
+        return track
 
     @staticmethod
     def _stream_info(track: Track) -> tuple[str, dict[str, str]]:
@@ -1165,10 +1189,7 @@ class MusicBot:
             try:
                 with yt_dlp.YoutubeDL(options) as ydl:
                     ydl.extract_info(candidate, download=True)
-                if any(
-                    p.is_file() and p.suffix not in {".part", ".ytdl"}
-                    for p in job_dir.iterdir()
-                ):
+                if _media_files(job_dir):
                     MusicBot._normalize_media(job_dir)
                     return job_dir
             except Exception as exc:
@@ -1191,13 +1212,7 @@ class MusicBot:
         원본의 깨진 타임스탬프나 VBR 타이밍 때문에 재생이 빨라졌다
         느려졌다 하거나 끊기는 것을 막기 위함. 실패하면 원본을 그대로 둔다.
         """
-        src = next(
-            (
-                p for p in job_dir.iterdir()
-                if p.is_file() and p.suffix not in {".part", ".ytdl"}
-            ),
-            None,
-        )
+        src = next(iter(_media_files(job_dir)), None)
         if src is None:
             return
         dst = job_dir / "normalized.opus"
@@ -1219,15 +1234,26 @@ class MusicBot:
             return
         src.unlink(missing_ok=True)
 
+    async def _enqueue_or_play(self, chat_id: int, track: Track) -> tuple[bool, bool]:
+        """재생 중이면 대기열에 넣고, 아니면 재생을 시작한다.
+
+        반환값은 (대기열에 넣었는지, 재생 계정을 새로 불러왔는지).
+        locks[chat_id]를 잡은 상태에서 호출할 것.
+        """
+        if chat_id in self.current:
+            self.queues[chat_id].append(track)
+            return True, False
+        pulled = await self._ensure_assistant_member(chat_id)
+        await self._promote_assistant(chat_id)
+        await self._play_track(chat_id, track)
+        return False, pulled
+
     async def _play_track(self, chat_id: int, track: Track) -> None:
         # ntgcalls가 원격 URL을 소리 없이 조기 종료하는 환경이 있어
         # 곡을 로컬 파일로 내려받은 뒤 그 파일을 재생한다.
         LOGGER.info("Playing '%s' (%s) in %s", track.title, track.webpage_url, chat_id)
         media_dir = await asyncio.to_thread(self._download_track, track)
-        media_files = [
-            p for p in media_dir.iterdir()
-            if p.is_file() and p.suffix not in {".part", ".ytdl"}
-        ]
+        media_files = _media_files(media_dir)
         if not media_files:
             shutil.rmtree(media_dir, ignore_errors=True)
             raise ValueError("다운로드된 오디오 파일이 없습니다")
@@ -1276,7 +1302,7 @@ class MusicBot:
 
         muted = await self._assistant_mute_state(chat_id)
         if muted is False:
-            return True if in_call else False
+            return bool(in_call)
         if muted is None:
             LOGGER.warning("Playback account is not visible in voice chat for %s", chat_id)
             return False
@@ -1413,10 +1439,7 @@ class MusicBot:
                 )
                 continue
             return track
-        try:
-            await self.calls.leave_call(chat_id)
-        except Exception:
-            LOGGER.info("Voice chat already disconnected for %s", chat_id)
+        await self._leave_call(chat_id)
         self.queues.pop(chat_id, None)
         return None
 
@@ -1432,12 +1455,15 @@ class MusicBot:
         if task and task is not asyncio.current_task():
             task.cancel()
 
+    async def _advance_and_announce(self, chat_id: int) -> None:
+        async with self.locks[chat_id]:
+            next_track = await self._advance(chat_id)
+        await self._announce_next(chat_id, next_track)
+
     async def _advance_after(self, chat_id: int, duration: float) -> None:
         try:
             await asyncio.sleep(duration + 2)
-            async with self.locks[chat_id]:
-                next_track = await self._advance(chat_id)
-            await self._announce_next(chat_id, next_track)
+            await self._advance_and_announce(chat_id)
         except asyncio.CancelledError:
             pass
         except Exception:
