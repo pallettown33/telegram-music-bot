@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram Voice Chat Music Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/telegram_music_bot
+ExecStart=/opt/telegram_music_bot/venv/bin/python /opt/telegram_music_bot/main.py
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

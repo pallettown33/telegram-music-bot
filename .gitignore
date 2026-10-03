@@ -1,0 +1,10 @@
+.env
+*.session
+*.session-journal
+*.session.old
+youtube_cookies.txt
+*.part
+downloads/
+__pycache__/
+.venv/
+refresh_youtube_cookies.sh
