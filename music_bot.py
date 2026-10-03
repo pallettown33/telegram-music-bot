@@ -131,10 +131,7 @@ _MEDIA_IGNORED_SUFFIXES = frozenset({".part", ".ytdl"})
 
 def _media_files(job_dir: Path) -> list[Path]:
     """다운로드 디렉터리에서 완성된 미디어 파일만 골라낸다."""
-    return [
-        p for p in job_dir.iterdir()
-        if p.is_file() and p.suffix not in _MEDIA_IGNORED_SUFFIXES
-    ]
+    return [p for p in job_dir.iterdir() if p.is_file() and p.suffix not in _MEDIA_IGNORED_SUFFIXES]
 
 
 def _queue_text(current: Track | None, queued) -> str | None:
@@ -142,9 +139,7 @@ def _queue_text(current: Track | None, queued) -> str | None:
     if current is None and not queued:
         return None
     lines = [f"재생 중: {_format_track(current)}" if current else "재생 중인 곡 없음"]
-    lines.extend(
-        f"{index}. {_format_track(track)}" for index, track in enumerate(queued, start=1)
-    )
+    lines.extend(f"{index}. {_format_track(track)}" for index, track in enumerate(queued, start=1))
     return "\n".join(lines)
 
 
@@ -156,17 +151,34 @@ _BAD_VERSION_RE = re.compile(
     re.IGNORECASE,
 )
 _BAD_VERSION_KO = (
-    "라이브", "콘서트", "커버", "리믹스", "편곡", "어쿠스틱", "버스킹",
-    "직캠", "노래방", "패러디", "리액션", "가요무대", "불후의 명곡",
-    "스케치북", "연주", "1시간",
+    "라이브",
+    "콘서트",
+    "커버",
+    "리믹스",
+    "편곡",
+    "어쿠스틱",
+    "버스킹",
+    "직캠",
+    "노래방",
+    "패러디",
+    "리액션",
+    "가요무대",
+    "불후의 명곡",
+    "스케치북",
+    "연주",
+    "1시간",
 )
 _GOOD_VERSION_RE = re.compile(
     r"\b(official|vevo|mv|m/v|music video)\b",
     re.IGNORECASE,
 )
 _GOOD_VERSION_KW = (
-    "official audio", "official video",
-    "audio", "오디오", "lyric", "가사",
+    "official audio",
+    "official video",
+    "audio",
+    "오디오",
+    "lyric",
+    "가사",
 )
 
 
@@ -176,9 +188,7 @@ class MusicBot:
         api_hash = os.getenv("TELEGRAM_API_HASH")
         bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         if not all((api_id, api_hash, bot_token)):
-            raise RuntimeError(
-                "TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN을 .env에 설정하세요."
-            )
+            raise RuntimeError("TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN을 .env에 설정하세요.")
         if shutil.which("ffmpeg") is None:
             raise RuntimeError("ffmpeg를 설치한 뒤 다시 실행하세요.")
 
@@ -225,9 +235,7 @@ class MusicBot:
             return TelegramClient(StringSession(assistant_session), self.api_id, self.api_hash)
 
         assistant_session_file = os.getenv("ASSISTANT_SESSION_FILE")
-        session_path = Path(
-            assistant_session_file or "telegram_music_bot.session"
-        ).expanduser()
+        session_path = Path(assistant_session_file or "telegram_music_bot.session").expanduser()
         if session_path.exists():
             LOGGER.info("Using assistant session file: %s", session_path)
         else:
@@ -300,9 +308,7 @@ class MusicBot:
                     return
                 next_track = await self._advance(chat_id)
             await self._np_refresh(chat_id)
-            await event.respond(
-                f"다음 곡 재생: {next_track.title}" if next_track else MSG_QUEUE_ENDED
-            )
+            await event.respond(f"다음 곡 재생: {next_track.title}" if next_track else MSG_QUEUE_ENDED)
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/pause(?:@\w+)?$"))
         async def pause_command(event: events.NewMessage.Event) -> None:
@@ -403,8 +409,7 @@ class MusicBot:
                 return
             await self._promote_assistant(event.chat_id, force=True, notify=True)
             await event.respond(
-                "재생 계정을 이 그룹으로 초대했습니다. "
-                "/play 또는 /join 으로 음성채팅에 불러올 수 있습니다."
+                "재생 계정을 이 그룹으로 초대했습니다. /play 또는 /join 으로 음성채팅에 불러올 수 있습니다."
             )
 
         @self.bot_client.on(events.ChatAction)
@@ -453,10 +458,7 @@ class MusicBot:
                         await event.answer(MSG_NO_TRACK)
                         return
                     next_track = await self._advance(chat_id)
-                    answer = (
-                        f"다음 곡 재생: {next_track.title}" if next_track
-                        else MSG_QUEUE_ENDED
-                    )
+                    answer = f"다음 곡 재생: {next_track.title}" if next_track else MSG_QUEUE_ENDED
                 elif action == "stop":
                     await self._stop_playback(chat_id)
                     answer = MSG_STOPPED
@@ -593,7 +595,9 @@ class MusicBot:
         except Exception as exc:
             LOGGER.info(
                 "Permission check failed for user %s in %s: %s",
-                user_id, chat_id, exc,
+                user_id,
+                chat_id,
+                exc,
             )
             return False
         return bool(getattr(permissions, "is_admin", False) or getattr(permissions, "is_creator", False))
@@ -623,9 +627,7 @@ class MusicBot:
     async def _respond_subscribe(self, event) -> None:
         text = "이 봇을 사용하려면 먼저 채널을 구독해주세요."
         if self.required_channel_link:
-            await event.respond(
-                text, buttons=[[Button.url("📢 채널 구독하기", self.required_channel_link)]]
-            )
+            await event.respond(text, buttons=[[Button.url("📢 채널 구독하기", self.required_channel_link)]])
         else:
             await event.respond(text)
 
@@ -689,11 +691,13 @@ class MusicBot:
     async def _unban_assistant(self, chat) -> None:
         if not isinstance(chat, Channel):
             return
-        await self.bot_client(EditBannedRequest(
-            channel=chat,
-            participant=self.assistant_ref,
-            banned_rights=ChatBannedRights(until_date=None, view_messages=False),
-        ))
+        await self.bot_client(
+            EditBannedRequest(
+                channel=chat,
+                participant=self.assistant_ref,
+                banned_rights=ChatBannedRights(until_date=None, view_messages=False),
+            )
+        )
 
     async def _pull_assistant(self, chat) -> None:
         try:
@@ -742,9 +746,7 @@ class MusicBot:
         if not invite_hash:
             if link:
                 await self._revoke_invite_link(chat, link)
-            raise RuntimeError(
-                "초대 링크를 만들지 못했습니다. 봇에 '사용자 초대' 권한이 필요합니다."
-            )
+            raise RuntimeError("초대 링크를 만들지 못했습니다. 봇에 '사용자 초대' 권한이 필요합니다.")
         try:
             try:
                 await self.assistant_client(ImportChatInviteRequest(invite_hash))
@@ -766,10 +768,12 @@ class MusicBot:
         # InviteHashExpiredError를 유발하므로 일반 링크로 만들고,
         # 입장 처리 후 _revoke_invite_link로 해지한다.
         try:
-            exported = await self.bot_client(ExportChatInviteRequest(
-                peer=chat,
-                title="music-assistant",
-            ))
+            exported = await self.bot_client(
+                ExportChatInviteRequest(
+                    peer=chat,
+                    title="music-assistant",
+                )
+            )
         except Exception as exc:
             LOGGER.info("Could not export invite link: %s", type(exc).__name__)
             return None
@@ -777,11 +781,13 @@ class MusicBot:
 
     async def _revoke_invite_link(self, chat, link: str) -> None:
         try:
-            await self.bot_client(EditExportedChatInviteRequest(
-                peer=chat,
-                link=link,
-                revoked=True,
-            ))
+            await self.bot_client(
+                EditExportedChatInviteRequest(
+                    peer=chat,
+                    link=link,
+                    revoked=True,
+                )
+            )
         except Exception as exc:
             LOGGER.info("Could not revoke invite link: %s", type(exc).__name__)
 
@@ -794,11 +800,13 @@ class MusicBot:
 
     async def _approve_join(self, chat) -> None:
         try:
-            await self.bot_client(HideChatJoinRequestRequest(
-                peer=chat,
-                user_id=self.assistant_ref,
-                approved=True,
-            ))
+            await self.bot_client(
+                HideChatJoinRequestRequest(
+                    peer=chat,
+                    user_id=self.assistant_ref,
+                    approved=True,
+                )
+            )
         except Exception as exc:
             LOGGER.info("Join approval failed: %s", type(exc).__name__)
 
@@ -854,12 +862,14 @@ class MusicBot:
         except Exception:
             pass
         try:
-            await self.bot_client(EditAdminRequest(
-                channel=chat_id,
-                user_id=self.assistant_ref,
-                admin_rights=ChatAdminRights(manage_call=True),
-                rank="음악 재생",
-            ))
+            await self.bot_client(
+                EditAdminRequest(
+                    channel=chat_id,
+                    user_id=self.assistant_ref,
+                    admin_rights=ChatAdminRights(manage_call=True),
+                    rank="음악 재생",
+                )
+            )
         except Exception as exc:
             LOGGER.warning("Assistant promotion failed in %s: %s", chat_id, exc)
             if notify:
@@ -964,8 +974,18 @@ class MusicBot:
     @staticmethod
     async def _try_click_captcha_button(chat_id: int, message) -> bool:
         keywords = (
-            "인증", "확인", "동의", "사람", "로봇", "통과",
-            "verify", "human", "robot", "captcha", "✅", "✔",
+            "인증",
+            "확인",
+            "동의",
+            "사람",
+            "로봇",
+            "통과",
+            "verify",
+            "human",
+            "robot",
+            "captcha",
+            "✅",
+            "✔",
         )
         flat = []
         for row_i, row in enumerate(message.buttons or []):
@@ -1003,18 +1023,17 @@ class MusicBot:
             if right == 0 or left % right:
                 return False
             value = left // right
-        matches = [
-            answer for answer in poll_media.poll.answers
-            if self._poll_answer_matches(answer, value)
-        ]
+        matches = [answer for answer in poll_media.poll.answers if self._poll_answer_matches(answer, value)]
         if len(matches) != 1:
             return False
         try:
-            await self.assistant_client(SendVoteRequest(
-                peer=chat_id,
-                msg_id=message.id,
-                options=[matches[0].option],
-            ))
+            await self.assistant_client(
+                SendVoteRequest(
+                    peer=chat_id,
+                    msg_id=message.id,
+                    options=[matches[0].option],
+                )
+            )
         except Exception as exc:
             LOGGER.warning("Captcha poll vote failed in %s: %s", chat_id, exc)
             return False
@@ -1074,8 +1093,7 @@ class MusicBot:
             info = ydl.extract_info(query, download=False)
         entries = info.get("entries") if isinstance(info, dict) else None
         candidates = tuple(
-            entry for entry in (entries or [info])
-            if entry and (entry.get("webpage_url") or entry.get("url"))
+            entry for entry in (entries or [info]) if entry and (entry.get("webpage_url") or entry.get("url"))
         )
         if not candidates:
             raise ValueError("검색 결과가 없습니다")
@@ -1089,16 +1107,12 @@ class MusicBot:
         raise ValueError("YouTube에서 재생 가능한 영상을 찾지 못했습니다")
 
     @staticmethod
-    def _first_playable(
-        entries, requested_by: str, candidate_urls: tuple[str, ...] | None = None
-    ) -> Track | None:
+    def _first_playable(entries, requested_by: str, candidate_urls: tuple[str, ...] | None = None) -> Track | None:
         """원곡 점수 순으로 후보를 순회하며 처음 재생 가능한 Track을 반환한다.
 
         candidate_urls를 넘기면 선택된 Track의 폴백 후보 목록으로 기록된다.
         """
-        for entry in sorted(
-            (e for e in entries if e), key=MusicBot._originality_score, reverse=True
-        ):
+        for entry in sorted((e for e in entries if e), key=MusicBot._originality_score, reverse=True):
             url = entry.get("webpage_url") or entry.get("url")
             if not url:
                 continue
@@ -1222,10 +1236,21 @@ class MusicBot:
         try:
             subprocess.run(
                 [
-                    "ffmpeg", "-y", "-v", "error",
-                    "-i", str(src), "-vn",
-                    "-ar", "48000", "-ac", "2",
-                    "-c:a", "libopus", "-b:a", "128k",
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(src),
+                    "-vn",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-c:a",
+                    "libopus",
+                    "-b:a",
+                    "128k",
                     str(dst),
                 ],
                 check=True,
@@ -1349,13 +1374,15 @@ class MusicBot:
             return None
         for attempt in range(4):
             try:
-                result = await self.assistant_client(GetGroupParticipantsRequest(
-                    call=call,
-                    ids=[],
-                    sources=[],
-                    offset="",
-                    limit=200,
-                ))
+                result = await self.assistant_client(
+                    GetGroupParticipantsRequest(
+                        call=call,
+                        ids=[],
+                        sources=[],
+                        offset="",
+                        limit=200,
+                    )
+                )
             except Exception as exc:
                 LOGGER.info("Could not fetch group call participants for %s: %s", chat_id, exc)
                 return None
@@ -1377,11 +1404,13 @@ class MusicBot:
         if call is None:
             return False
         try:
-            await self.assistant_client(EditGroupCallParticipantRequest(
-                call=call,
-                participant=InputPeerSelf(),
-                muted=False,
-            ))
+            await self.assistant_client(
+                EditGroupCallParticipantRequest(
+                    call=call,
+                    participant=InputPeerSelf(),
+                    muted=False,
+                )
+            )
         except Exception as exc:
             LOGGER.info("Assistant could not unmute itself in %s: %s", chat_id, exc)
             return False
@@ -1396,11 +1425,13 @@ class MusicBot:
         if call is None:
             return False
         try:
-            await self.bot_client(EditGroupCallParticipantRequest(
-                call=call,
-                participant=self.assistant_ref,
-                muted=False,
-            ))
+            await self.bot_client(
+                EditGroupCallParticipantRequest(
+                    call=call,
+                    participant=self.assistant_ref,
+                    muted=False,
+                )
+            )
         except Exception as exc:
             LOGGER.info("Bot could not unmute assistant in %s: %s", chat_id, exc)
             return False
@@ -1438,7 +1469,8 @@ class MusicBot:
             except Exception:
                 LOGGER.exception(
                     "Failed to play queued track '%s' in %s; trying next",
-                    track.title, chat_id,
+                    track.title,
+                    chat_id,
                 )
                 continue
             return track
@@ -1449,9 +1481,7 @@ class MusicBot:
     def _schedule_advance(self, chat_id: int, duration: float | None) -> None:
         self._cancel_advance(chat_id)
         if duration and duration > 0:
-            self.advance_tasks[chat_id] = asyncio.create_task(
-                self._advance_after(chat_id, float(duration))
-            )
+            self.advance_tasks[chat_id] = asyncio.create_task(self._advance_after(chat_id, float(duration)))
 
     def _cancel_advance(self, chat_id: int) -> None:
         task = self.advance_tasks.pop(chat_id, None)
@@ -1473,22 +1503,24 @@ class MusicBot:
             LOGGER.exception("Automatic queue advance failed for %s", chat_id)
 
     async def _register_bot_commands(self) -> None:
-        await self.bot_client(SetBotCommandsRequest(
-            scope=BotCommandScopeDefault(),
-            lang_code="",
-            commands=[
-                BotCommand("start", "봇 시작 및 안내"),
-                BotCommand("help", "명령어 도움말"),
-                BotCommand("play", "노래 재생 또는 대기열 추가"),
-                BotCommand("join", "재생 계정을 음성채팅에 입장"),
-                BotCommand("skip", "현재 곡 건너뛰기"),
-                BotCommand("pause", "재생 일시정지"),
-                BotCommand("resume", "재생 재개"),
-                BotCommand("queue", "대기열 확인"),
-                BotCommand("stop", "재생 종료 및 퇴장"),
-                BotCommand("reload", "봇 재시작 (그룹 관리자 전용)"),
-            ],
-        ))
+        await self.bot_client(
+            SetBotCommandsRequest(
+                scope=BotCommandScopeDefault(),
+                lang_code="",
+                commands=[
+                    BotCommand("start", "봇 시작 및 안내"),
+                    BotCommand("help", "명령어 도움말"),
+                    BotCommand("play", "노래 재생 또는 대기열 추가"),
+                    BotCommand("join", "재생 계정을 음성채팅에 입장"),
+                    BotCommand("skip", "현재 곡 건너뛰기"),
+                    BotCommand("pause", "재생 일시정지"),
+                    BotCommand("resume", "재생 재개"),
+                    BotCommand("queue", "대기열 확인"),
+                    BotCommand("stop", "재생 종료 및 퇴장"),
+                    BotCommand("reload", "봇 재시작 (그룹 관리자 전용)"),
+                ],
+            )
+        )
 
     async def _reload(self) -> None:
         await asyncio.sleep(0.5)
